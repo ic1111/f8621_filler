@@ -9,7 +9,6 @@ import numpy as np
 
 exec(open(r'8621_xy_coordinates.py').read())
 
-current_year = 2019
 
 def create_overlay(path):
     """
@@ -18,6 +17,7 @@ def create_overlay(path):
     """
     number_of_lots = 5
     data_dict, file_dict = create_gui()
+    tax_year=2000+int(data_dict["Tax year"])
     df_lot = pd.read_excel(file_dict['file'],sheet_name = 'Lot Details')
     df_eoy = pd.read_excel(file_dict['file'],sheet_name = 'EOY Details')
     number_of_lots = len(df_lot.index)
@@ -26,10 +26,11 @@ def create_overlay(path):
     coordinates = get_coordinates()
     add_personal_info(c,coordinates,data_dict)
     add_pfic_info(c,coordinates,data_dict)
-    add_part_1(c,coordinates,data_dict,df_lot, df_eoy)
+    add_part_1(c,coordinates,data_dict,df_lot, df_eoy,tax_year)
     add_part_2(c,coordinates,data_dict)
     for lot in range(number_of_lots):
-        add_part_4(c,coordinates,df_lot,df_eoy,lot)
+        if not add_part_4(c,coordinates,df_lot,df_eoy,lot,tax_year):
+            number_of_lots=number_of_lots-1
     c.save()
     return number_of_lots
 
@@ -45,7 +46,7 @@ def add_pfic_info(c,coordinates,data_dict):
     for key in keys:
         c.drawString(coordinates[key][0],coordinates[key][1], data_dict[key])
 
-def add_part_1(c,coordinates,data_dict, df_lot, df_eoy):
+def add_part_1(c,coordinates,data_dict, df_lot, df_eoy,current_year):
     part_1_dict = {}
     part_1_dict['Date of Aquision'] = 'Multiple'
     part_1_dict['Number of Shares'] = 0
@@ -53,9 +54,11 @@ def add_part_1(c,coordinates,data_dict, df_lot, df_eoy):
     part_1_dict["Amount of 1293"] = ''
     part_1_dict['Descrition of each class of shares']='Class A'
     for lot in range(len(df_lot.index)):
-        price_aquisition = df_lot['Price per share: Acquisition'][lot]
-        cost_aquisition = df_lot['Cost: Acquisition'][lot]
-        part_1_dict['Number of Shares'] = part_1_dict['Number of Shares'] + cost_aquisition/price_aquisition
+        # Check if lot was sold and get last price and ER
+        if np.isnan(df_lot["Price per share: Sale"][lot]):
+            price_aquisition = df_lot['Price per share: Acquisition'][lot]
+            cost_aquisition = df_lot['Cost: Acquisition'][lot]
+            part_1_dict['Number of Shares'] = part_1_dict['Number of Shares'] + cost_aquisition/price_aquisition
 
     last_er = df_eoy[df_eoy['Year']==current_year]["Exchange Rate"].values[0]
     last_price = df_eoy[df_eoy['Year']==current_year]["Price"].values[0]
@@ -84,8 +87,7 @@ def add_part_1(c,coordinates,data_dict, df_lot, df_eoy):
 def add_part_2(c,coordinates,data_dict):
     c.drawString(52.4, 205.5, u'\u2713') # Part II election to MTM PFIC stock
 
-def add_part_4(c,coordinates,df_lot,df_eoy,lot):
-    c.showPage()
+def add_part_4(c,coordinates,df_lot,df_eoy,lot,current_year):
     etf_dict = {}
     # Get info about origianl aquisition
     year_of_aqiusition = df_lot['Date: Acquisition'][lot].year
@@ -96,32 +98,26 @@ def add_part_4(c,coordinates,df_lot,df_eoy,lot):
     number_of_shares = cost_aquisition/price_aquisition
     original_basis = cost_aquisition/er_of_aqiusition
 
+    # Get last year's basis
+    if current_year > year_of_aqiusition:
+        prev_year_er = df_eoy[df_eoy['Year']==current_year-1]["Exchange Rate"].values[0]
+        prev_year_price = df_eoy[df_eoy['Year']==current_year-1]["Price"].values[0]
+        adjusted_basis = round(number_of_shares*prev_year_price/prev_year_er)
+    else:
+        adjusted_basis =  round(original_basis)
+
+
     # Check if lot was sold and get last price and ER
     if np.isnan(df_lot["Price per share: Sale"][lot]):
         print("no sale")
         last_er = df_eoy[df_eoy['Year']==current_year]["Exchange Rate"].values[0]
         last_price = df_eoy[df_eoy['Year']==current_year]["Price"].values[0]
-    else:
-        print("sale")
-        last_er = df_lot['Exchange Rate: Sale'][lot]
-        last_price = df_lot['Price per share: Sale'][lot]
-        year_of_sale = df_lot['Date: Sale'][lot].year
+        fmv_dollars = round(number_of_shares*last_price/last_er)
+        print("Last ER={}, Last Price={}".format(last_er,last_price))
+        print("FMV={}, Adjusted Basis={}".format(fmv_dollars,adjusted_basis))
 
-    fmv_dollars = number_of_shares*last_price/last_er
-
-
-    if current_year > year_of_aqiusition:
-        prev_year_er = df_eoy[df_eoy['Year']==current_year-1]["Exchange Rate"].values[0]
-        prev_year_price = df_eoy[df_eoy['Year']==current_year-1]["Price"].values[0]
-        adjusted_basis = number_of_shares*prev_year_price/prev_year_er
-    else:
-        adjusted_basis =  original_basis
-
-    if np.isnan(df_lot["Price per share: Sale"][lot]):
-        print("no sale")
-
-        etf_dict['10a'] = round(fmv_dollars)
-        etf_dict['10b'] = round(adjusted_basis)
+        etf_dict['10a'] = fmv_dollars
+        etf_dict['10b'] = adjusted_basis
         etf_dict['10c'] = etf_dict['10a'] - etf_dict['10b']
         if etf_dict['10c']<0:
             if adjusted_basis > original_basis:
@@ -149,6 +145,14 @@ def add_part_4(c,coordinates,df_lot,df_eoy,lot):
 
     else:
         print("sale")
+        last_er = df_lot['Exchange Rate: Sale'][lot]
+        last_price = df_lot['Price per share: Sale'][lot]
+        year_of_sale = df_lot['Date: Sale'][lot].year
+        if year_of_sale<current_year:
+            return False
+        fmv_dollars = round(number_of_shares*last_price/last_er)
+        print("Last ER={}, Last Price={}".format(last_er,last_price))
+        print("FMV={}, Adjusted Basis={}".format(fmv_dollars,adjusted_basis))
         etf_dict['13a'] = round(fmv_dollars)
         etf_dict['13b'] = round(adjusted_basis)
         etf_dict['13c'] = etf_dict['13a'] - etf_dict['13b']
@@ -179,8 +183,10 @@ def add_part_4(c,coordinates,df_lot,df_eoy,lot):
         etf_dict['11'] = ''
         etf_dict['12'] = ''
 
+    c.showPage()
     for key in etf_dict.keys():
         c.drawString(coordinates[key][0],coordinates[key][1], '{}'.format(etf_dict[key]))
+    return True
 
 
 def merge_pdfs(pdf_1, pdf_2, output):
@@ -301,7 +307,7 @@ def create_gui():
         data_dict['Identifying Number'] = '123-45-6789'
         data_dict['Address'] = '1600 Pennsylvania Avenue'
         data_dict['City, State, Zip'] = 'Washigton DC'
-        data_dict['Tax year'] = '19'
+        data_dict['Tax year'] = '23'
         data_dict['Type of Shareholder'] = u'\u2713'
         data_dict['Name of PFIC'] = 'My_ETF'
         data_dict['PFIC Address'] = 'My_ETF_Address'
